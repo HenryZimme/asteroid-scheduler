@@ -1,4 +1,4 @@
-# asteroid-observation-scheduler
+# asteroid-scheduler
 
 **Phase-gap-aware multi-site observing window scheduler for asteroid rotational lightcurve campaigns.**
 
