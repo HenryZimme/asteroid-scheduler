@@ -34,7 +34,7 @@ ALT_STEP_MINUTES = 1
 
 # --- observing sites ---
 # time_offset: hours from UTC (e.g. -5 = EST, +11 = AEDT)
-# update seasonally for sites that observe daylight saving time.
+# update seasonally for sites that observe daylight saving time. current settings are set to March 1, 2026
 SITES = {
     'G40 Canary 1': {
         'lat':         28.29970,
