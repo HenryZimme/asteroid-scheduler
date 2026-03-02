@@ -41,7 +41,7 @@ SITES = {
         'lon':        -16.5082,
         'elev':        2390,
         'mpc_code':   'G40',
-        'time_offset': 0,       # WET
+        'time_offset': 0,       # WET (winter); change to +1 for summer
     },
     'W88 Chile 2': {
         'lat':         -33.269,
