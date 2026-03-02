@@ -8,6 +8,9 @@ lightcurve phase gap, and reports lunar sky brightness at window start
 and midpoint. local times are shown alongside UTC using zoneinfo (stdlib)
 with the tzdata package for DST handling — no manual offset updates needed.
 
+phase calculation uses BJD_TDB with light travel time correction (LTTC)
+per Eastman et al. (2010). T0_JD must be in BJD_TDB+LTTC format.
+
 install: pip install astroquery astropy ephem tzdata
 """
 
@@ -17,11 +20,11 @@ install: pip install astroquery astropy ephem tzdata
 
 # --- target ---
 # ex 1: standard main belt (7605 Cindygraber)
-ASTEROID_ID   = '7605'
+'''ASTEROID_ID   = '7605'
 ASTEROID_NAME = 'Cindygraber'
 T0_JD        = 2461084.655574
 PERIOD_H     = 11.939
-PERIOD_ERR_H = 0.005  # added: period uncertainty in hours #'''
+PERIOD_ERR_H = 0.001  # period uncertainty in hours #'''
 
 #ex 2: fast rotator / faint target (uncomment to test)
 '''ASTEROID_ID   = '1998 KY26'
@@ -31,25 +34,39 @@ PERIOD_H     = 0.0891933333  # 5.3 minutes!
 PERIOD_ERR_H = 0.000001#'''
 
 # ex 3: bright / slow rotator (uncomment to test)
-'''ASTEROID_ID   = '343'
+ASTEROID_ID   = '343'
 ASTEROID_NAME = 'Ostara'
-T0_JD        = 2452900.0
+
+# !! IMPORTANT — BJD_TDB + LTTC EPOCH REQUIRED !!
+# T0_JD must be expressed in Barycentric Julian Date (BJD_TDB) with the
+# one-way asteroid-to-earth light travel time already subtracted — i.e. the
+# epoch represents the moment the asteroid *emitted* the reference light, not
+# when it was recorded at your telescope.
+#
+# if your T0 came from a standard observatory reduction (JD_UTC or JD_TDB
+# without LTTC), convert it before entering it here. use the LTTC calculator
+# at the bottom of this cell or tools such as:
+#   https://astroutils.astronomy.osu.edu/time/bjdconvert.html  (Eastman 2010)
+#   or call get_asteroid_emission_bjd() on your original epoch.
+#
+# failure to use a BJD_TDB+LTTC epoch will introduce a systematic phase
+# offset of up to ~8 minutes (delta_au * 0.0057755 days) that drifts with
+# changing earth-asteroid distance.
+T0_JD        = 2452900.0   # <-- must be BJD_TDB+LTTC; see warning above
 PERIOD_H     = 109.9
-PERIOD_ERR_H = 0.52#'''
+PERIOD_ERR_H = 0.52
 
 # --- date range ---
 from datetime import datetime, timedelta
-DATE_START = datetime.now() # or use datetime(year, month, day), ex. datetime(2026, 3, 1) for March 1, 2026
+DATE_START = datetime.now() # or use datetime(year, month, day)
 N_DAYS     = 15
 
 # --- ephemeris sampling ---
 # step passed to MPC.get_ephemeris. examples: '1d', '6h', '1h', '30min'
-# '1h' recommended — finer steps give better RA/Dec interpolation.
-# console table shows one row per day; full data goes to CSV.
+# '1h' recommended — finer steps give better RA/Dec/Delta interpolation.
 EPHEM_STEP = '1h'
 
 # resolution for altitude/moon stepping in the window calculator (minutes)
-# ideally don't go below 10 minutes for altitude step unless planning a long, computationally intensive campaign
 ALT_STEP_MINUTES = 1
 
 # --- observing sites ---
@@ -81,16 +98,14 @@ SITES = {
     },
 }
 
-# site used for the MPC ephemeris query
+# site used for the MPC ephemeris query and for the barycentric correction
+# in gap_occurrences. any valid MPC site works; primary site is conventional.
 PRIMARY_SITE = 'G40 Canary 1'
 
 # --- altitude threshold ---
 MIN_ALT_DEG = 20.0
 
 # --- moon / sky brightness (Krisciunas-Schaefer 1991) ---
-# dark sky V-band brightness at each site (mag/arcsec^2).
-# typical: excellent site ~22.0, good ~21.5, average ~21.0
-# either a single float (all sites) or a dict keyed by site name.
 DARK_SKY_MAG = {
     'G40 Canary 1':                     21.9,
     'E62 Australia 1':                  21.7,
@@ -98,29 +113,18 @@ DARK_SKY_MAG = {
     'I12 Phillips Academy Observatory': 20.5,
 }
 
-# v-band extinction coefficient (mag/airmass)
-# converted to a site-specific dict to handle varying elevations/climates
 EXTINCTION_K = {
-    'G40 Canary 1':                     0.15,  # high altitude, dry
-    'W88 Chile 2':                      0.15,  # high alt, dry
-    'E62 Australia 1':                  0.20,  # mid alt
-    'I12 Phillips Academy Observatory': 0.25,  # sea level, humid/suburban
+    'G40 Canary 1':                     0.15,
+    'W88 Chile 2':                      0.15,
+    'E62 Australia 1':                  0.20,
+    'I12 Phillips Academy Observatory': 0.25,
 }
 
-# NOTE: categorical sky brightness labels have been removed as requested by peer feedback.
-# the tool will directly output physical mag/arcsec^2 values.
-
-
 # --- lightcurve parameters ---
-# USE_LIGHTCURVE = False  →  full visibility window per night (no phase filter)
-# USE_LIGHTCURVE = True   →  windows further restricted to the phase gap;
-#                            gap 1 and gap 2 shown separately
 USE_LIGHTCURVE = True
 
-T0_JD        = 2461084.655574   # JDo(LTC) from lightcurve plot: epoch of phase 0.0
-PERIOD_H     = 11.939            # rotation period in hours
-GAP_START_PH = 0.72              # phase where your coverage ends
-GAP_END_PH   = 1.00              # phase 1.0 = 0.0 (full rotation)
+GAP_START_PH = 0.72
+GAP_END_PH   = 1.00
 
 # --- output files ---
 SAVE_CSV    = True
@@ -134,8 +138,6 @@ CSV_WINDOWS = f'windows_{ASTEROID_ID}.csv'
 import ephem
 import math
 import csv
-import pandas as pd
-import seaborn as sns
 from zoneinfo import ZoneInfo
 from astroquery.mpc import MPC
 import pytz
@@ -143,6 +145,11 @@ from icalendar import Calendar, Event
 from timezonefinder import TimezoneFinder
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
+# astropy: required for BJD_TDB conversion and barycentric light travel time
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation
+import astropy.units as u
 
 # ==============================================================================
 # CELL 3 — EPHEMERIS QUERY
@@ -215,10 +222,10 @@ def morning_dawn(obs, date):
 
 def dark_window(obs, date, gap_s=None):
     """
-    return (dark_start, dark_end) = astronomical twilight end → dawn.
+    return (dark_start, dark_end) = astronomical twilight end to dawn.
     uses gap_s to determine which night's dark window to use:
-      gap in utc morning (hour < 12) → previous evening's twilight → this morning's dawn
-      gap in utc evening/night        → this evening's twilight → next morning's dawn
+      gap in utc morning (hour < 12) -> previous evening's twilight -> this morning's dawn
+      gap in utc evening/night        -> this evening's twilight -> next morning's dawn
     when gap_s is None (no lightcurve), defaults to evening.
     """
     if gap_s is not None and gap_s.hour < 12:
@@ -241,7 +248,6 @@ def offset_str(dt, tz_str):
     """
     return the UTC offset string for a given UTC datetime and IANA tz string.
     reflects actual DST state at that moment, e.g. 'UTC-4' in EDT, 'UTC-5' in EST.
-    dt should be a naive UTC datetime.
     """
     local = utc_to_local(dt, tz_str)
     offset_secs = int(local.utcoffset().total_seconds())
@@ -256,42 +262,49 @@ def offset_str(dt, tz_str):
 tf = TimezoneFinder()
 
 def get_site_tz(lat, lon):
-    """Auto-lookup IANA timezone string from coordinates."""
+    """auto-lookup IANA timezone string from coordinates."""
     return tf.timezone_at(lat=lat, lng=lon)
 
 # ==============================================================================
-# CELL 5 — RA/Dec INTERPOLATION FROM MPC TABLE
+# CELL 5 — RA/Dec/Delta INTERPOLATION FROM MPC TABLE
 # ==============================================================================
 
-def build_radec_lookup(eph_table):
-    """build sorted list of (datetime, ra_deg, dec_deg) from MPC astropy table"""
+def build_radec_delta_lookup(eph_table):
+    """
+    build sorted list of (datetime, ra_deg, dec_deg, delta_au) from MPC table.
+    delta (earth-asteroid distance in AU) is required for LTTC phase correction.
+    """
     lookup = []
     for row in eph_table:
-        dt  = row['Date'].to_datetime()
-        ra  = float(row['RA'])
-        dec = float(row['Dec'])
-        lookup.append((dt, ra, dec))
+        dt    = row['Date'].to_datetime()
+        ra    = float(row['RA'])
+        dec   = float(row['Dec'])
+        delta = float(row['Delta'])
+        lookup.append((dt, ra, dec, delta))
     return sorted(lookup, key=lambda x: x[0])
 
-def interpolate_radec(lookup, dt):
+def _interp_raw(lookup, dt):
     """
-    linear interpolation of RA/Dec for a given datetime.
-    returns (ra_str, dec_str) in ephem-compatible h:m:s / ±d:m:s format.
+    shared linear interpolation core. returns (ra_deg, dec_deg, delta_au).
+    handles boundary clamping and walks the sorted lookup list.
     """
     if dt <= lookup[0][0]:
-        ra_deg, dec_deg = lookup[0][1], lookup[0][2]
-    elif dt >= lookup[-1][0]:
-        ra_deg, dec_deg = lookup[-1][1], lookup[-1][2]
-    else:
-        for i in range(len(lookup) - 1):
-            t0, r0, d0 = lookup[i]
-            t1, r1, d1 = lookup[i + 1]
-            if t0 <= dt <= t1:
-                frac    = (dt - t0).total_seconds() / (t1 - t0).total_seconds()
-                ra_deg  = r0 + frac * (r1 - r0)
-                dec_deg = d0 + frac * (d1 - d0)
-                break
+        return lookup[0][1], lookup[0][2], lookup[0][3]
+    if dt >= lookup[-1][0]:
+        return lookup[-1][1], lookup[-1][2], lookup[-1][3]
+    for i in range(len(lookup) - 1):
+        t0, r0, d0, dl0 = lookup[i]
+        t1, r1, d1, dl1 = lookup[i + 1]
+        if t0 <= dt <= t1:
+            frac    = (dt - t0).total_seconds() / (t1 - t0).total_seconds()
+            ra_deg  = r0  + frac * (r1  - r0)
+            dec_deg = d0  + frac * (d1  - d0)
+            delta   = dl0 + frac * (dl1 - dl0)
+            return ra_deg, dec_deg, delta
+    return lookup[-1][1], lookup[-1][2], lookup[-1][3]
 
+def _deg_to_ephem_str(ra_deg, dec_deg):
+    """convert decimal ra/dec degrees to ephem-compatible h:m:s / ±d:m:s strings."""
     ra_h   = ra_deg / 15.0
     ra_str = (f"{int(ra_h)}:{int((ra_h % 1) * 60)}:"
               f"{((ra_h % 1) * 60 % 1) * 60:.2f}")
@@ -300,6 +313,67 @@ def interpolate_radec(lookup, dt):
     dec_str = (f"{sign}{int(dec_abs)}:{int((dec_abs % 1) * 60)}:"
                f"{((dec_abs % 1) * 60 % 1) * 60:.2f}")
     return ra_str, dec_str
+
+def interpolate_radec(lookup, dt):
+    """
+    linear interpolation of RA/Dec for a given datetime.
+    returns (ra_str, dec_str) in ephem-compatible format.
+    used by get_alt_ephem and lunar_sky_brightness (ephem callers).
+    """
+    ra_deg, dec_deg, _ = _interp_raw(lookup, dt)
+    return _deg_to_ephem_str(ra_deg, dec_deg)
+
+def interpolate_position(lookup, dt):
+    """
+    linear interpolation returning physical coordinates for BJD calculation.
+    returns (ra_deg, dec_deg, delta_au).
+    """
+    return _interp_raw(lookup, dt)
+
+# ==============================================================================
+# CELL 5B — BJD_TDB + LTTC PHASE CORRECTION
+# ==============================================================================
+
+def get_asteroid_emission_bjd(utc_dt, ra_deg, dec_deg, delta_au, site_cfg=None):
+    """
+    convert a UTC observation time to BJD_TDB, then subtract the one-way
+    asteroid-to-earth light travel time (LTTC) to obtain the epoch at which
+    the asteroid *emitted* the observed light.
+
+    this is the correct time standard for comparing against a T0_JD that was
+    derived from a phased lightcurve using BJD_TDB+LTTC (Eastman et al. 2010).
+
+    args:
+        utc_dt   : naive python datetime in UTC
+        ra_deg   : asteroid right ascension in decimal degrees (J2000)
+        dec_deg  : asteroid declination in decimal degrees (J2000)
+        delta_au : earth-asteroid distance in AU at utc_dt
+        site_cfg : dict with keys lat, lon, elev for the observatory.
+                   if None, geocenter is used (difference is < 0.02 s).
+
+    returns:
+        float: BJD_TDB of asteroid emission event
+    """
+    t  = Time(utc_dt, format='datetime', scale='utc')
+    sc = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+
+    if site_cfg is not None:
+        loc = EarthLocation(lat=site_cfg['lat']  * u.deg,
+                            lon=site_cfg['lon']  * u.deg,
+                            height=site_cfg['elev'] * u.m)
+    else:
+        # geocenter: adequate when no site_cfg is provided
+        loc = EarthLocation(lat=0 * u.deg, lon=0 * u.deg, height=0 * u.m)
+
+    # barycentric light travel time: accounts for earth's orbital motion
+    # relative to the solar system barycenter (roemer delay + relativistic terms)
+    ltt_bary  = t.light_travel_time(sc, 'barycentric', location=loc)
+    bjd_tdb   = (t.tdb + ltt_bary).jd
+
+    # subtract one-way light travel time from asteroid to earth:
+    # 0.0057755 days/AU = 1 AU / c
+    lttc_days = delta_au * 0.0057755
+    return bjd_tdb - lttc_days
 
 # ==============================================================================
 # CELL 6 — KRISCIUNAS-SCHAEFER (1991) LUNAR SKY BRIGHTNESS MODEL
@@ -314,7 +388,6 @@ def _airmass(alt_deg):
 
 
 def lunar_sky_brightness(obs, dt, ra_str, dec_str, dark_sky_mag, k=0.172):
-    # k defaults to 0.172 if not explicitly passed
     """
     compute total V-band sky brightness at the target position.
     Krisciunas & Schaefer (1991) PASP 103, 1033.
@@ -336,7 +409,6 @@ def lunar_sky_brightness(obs, dt, ra_str, dec_str, dark_sky_mag, k=0.172):
     target_alt = math.degrees(float(target.alt))
     sep_deg    = math.degrees(float(ephem.separation(moon, target)))
 
-    # phase angle from illumination fraction
     illum_frac = max(0.0, min(1.0, illum_pct / 100.0))
     alpha_deg  = math.degrees(
         math.acos(max(-1.0, min(1.0, 2.0 * illum_frac - 1.0)))
@@ -378,36 +450,50 @@ def lunar_sky_brightness(obs, dt, ra_str, dec_str, dark_sky_mag, k=0.172):
 # CELL 7 — WINDOW CALCULATOR
 # ==============================================================================
 
-J2000 = datetime(2000, 1, 1, 12, 0, 0)
+def gap_occurrences(date, radec_delta_lookup, site_cfg=None):
+    """
+    compute the UTC start/end times for gap 1 and gap 2 on a given date,
+    using BJD_TDB + LTTC for the phase calculation.
 
-def utc_to_jd(dt):
-    return 2451545.0 + (dt - J2000).total_seconds() / 86400.0
+    args:
+        date               : python datetime (UTC midnight of the observing date)
+        radec_delta_lookup : output of build_radec_delta_lookup()
+        site_cfg           : site dict (lat, lon, elev) for barycentric correction.
+                             uses primary site in main(); geocenter if None.
 
-def gap_occurrences(date):
-    """calculates gap occurrences with phase uncertainty propagation."""
-    # propagate uncertainty based on time elapsed since T0
-    days_since_t0 = utc_to_jd(date) - T0_JD
-    cycles = (days_since_t0 * 24.0) / PERIOD_H
-    accumulated_error_h = cycles * PERIOD_ERR_H
+    returns:
+        g1s_min, g1e_max, g2s_min, g2e_max — UTC datetimes, expanded by
+        accumulated period uncertainty since T0.
+    """
+    # interpolate asteroid position at start of this date for phase reference
+    ra_deg, dec_deg, delta_au = interpolate_position(radec_delta_lookup, date)
+
+    # convert to BJD_TDB and subtract LTTC to get asteroid emission epoch
+    emission_bjd = get_asteroid_emission_bjd(
+        date, ra_deg, dec_deg, delta_au, site_cfg
+    )
+
+    # phase and accumulated period drift since T0
+    days_since_t0       = emission_bjd - T0_JD
+    cycles              = (days_since_t0 * 24.0) / PERIOD_H
+    accumulated_error_h = abs(cycles) * PERIOD_ERR_H
 
     gap_dur_h = (GAP_END_PH - GAP_START_PH) * PERIOD_H
-    ph_mn     = ((utc_to_jd(date) - T0_JD) * 24.0 / PERIOD_H) % 1.0
+    ph_mn     = (days_since_t0 * 24.0 / PERIOD_H) % 1.0
     dp        = (GAP_START_PH - ph_mn) % 1.0
 
-    # nominal times
+    # nominal gap windows (UTC)
     g1s = date + timedelta(hours=dp * PERIOD_H)
     g1e = g1s + timedelta(hours=gap_dur_h)
     g2s = g1s + timedelta(hours=PERIOD_H)
     g2e = g1e + timedelta(hours=PERIOD_H)
 
-    # expand window boundaries considering +/- accumulated drift
+    # expand by accumulated drift uncertainty so observer doesn't miss the gap
     g1s_min = g1s - timedelta(hours=accumulated_error_h)
     g1e_max = g1e + timedelta(hours=accumulated_error_h)
     g2s_min = g2s - timedelta(hours=accumulated_error_h)
     g2e_max = g2e + timedelta(hours=accumulated_error_h)
 
-    # by returning expanded windows, you ensure the observer doesn't miss the
-    # gap even if the physical rotation period has drifted from the nominal value.
     return g1s_min, g1e_max, g2s_min, g2e_max
 
 def step_through(obs_site, win_s, win_e, radec_lookup):
@@ -457,7 +543,7 @@ def compute_window(obs_site, date, cfg, radec_lookup,
         t_mid    = t_s + (t_e - t_s) / 2
         ra_s,  dec_s = interpolate_radec(radec_lookup, t_s)
         ra_m,  dec_m = interpolate_radec(radec_lookup, t_mid)
-        k_val = EXTINCTION_K.get(obs_site, 0.172) # get the specific extinction for this site, fallback to 0.172 if not in dict
+        k_val = EXTINCTION_K.get(cfg.get('name', ''), 0.172)
         result.update({
             'obs_start':  t_s,
             'obs_end':    t_e,
@@ -465,11 +551,10 @@ def compute_window(obs_site, date, cfg, radec_lookup,
             'alt_start':  a_s,
             'alt_end':    a_e,
             'limit':      _limit(t_e, gap_e, dark_e),
-
             'moon_start': lunar_sky_brightness(
                               obs_site, t_s,   ra_s, dec_s, dark_sky_mag, k=k_val),
             'moon_mid':   lunar_sky_brightness(
-                              obs_site, t_mid,   ra_m, dec_m, dark_sky_mag, k=k_val),
+                              obs_site, t_mid, ra_m, dec_m, dark_sky_mag, k=k_val),
         })
     else:
         if win_s >= win_e:
@@ -491,24 +576,6 @@ def _limit(obs_end, gap_end, dawn):
 # ==============================================================================
 # CELL 8 — DISPLAY AND CSV
 # ==============================================================================
-
-def set_pub_style():
-    sns.set_theme(style="ticks", context="paper")
-    plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif": ["Times New Roman", "DejaVu Serif"],
-        "mathtext.fontset": "stix",
-        "axes.labelsize": 14,
-        "axes.titlesize": 14,
-        "xtick.labelsize": 12,
-        "ytick.labelsize": 12,
-        "xtick.direction": "in",
-        "ytick.direction": "in",
-        "lines.linewidth": 1.5,
-        "figure.dpi": 300
-    })
-
-set_pub_style()
 
 W = 92   # console width
 
@@ -587,7 +654,7 @@ def print_ephem_table(eph_table, step):
 
     if rows_per_day > 1:
         print(f"\n  note: {len(eph_table)} rows queried ({step} step); "
-              f"table shows one row per day. full data → {CSV_EPHEM}")
+              f"table shows one row per day. full data -> {CSV_EPHEM}")
 
 def save_ephem_csv(eph_table, filename):
     with open(filename, 'w', newline='') as f:
@@ -599,7 +666,7 @@ def save_ephem_csv(eph_table, filename):
         writer.writerow(eph_table.colnames)
         for row in eph_table:
             writer.writerow([str(row[c]) for c in eph_table.colnames])
-    print(f"  saved → {filename}  ({len(eph_table)} rows, "
+    print(f"  saved -> {filename}  ({len(eph_table)} rows, "
           f"{len(eph_table.colnames)} columns)")
 
 # --- window display ----------------------------------------------------------
@@ -610,13 +677,12 @@ def print_window_row(date, result, cfg, gap_window=''):
     mins   = result['minutes']
 
     if mins > 0:
-        # compute the utc offset string at the actual window start time
         tz_label  = offset_str(result['obs_start'], tz_str)
         utc_rng   = f"{hm(result['obs_start'])} – {hm(result['obs_end'])} UTC"
         local_rng = (f"{hm_local(result['obs_start'], tz_str)} – "
                      f"{hm_local(result['obs_end'],   tz_str)} "
                      f"local ({tz_label})")
-        alt_rng   = (f"{result['alt_start']:.0f}° → {result['alt_end']:.0f}°"
+        alt_rng   = (f"{result['alt_start']:.0f}° -> {result['alt_end']:.0f}°"
                      if result['alt_start'] is not None else '—')
         lim       = result['limit']
 
@@ -654,7 +720,7 @@ def print_window_header(with_gap=False):
           f"{'Altitude':<13}  Limit")
     print("  " + "-" * (W - 2))
 
-# --- csv for windows ---------------------------------------------------------
+# --- CSV for windows ---------------------------------------------------------
 
 def _moon_csv(m, prefix):
     if m is None:
@@ -669,7 +735,6 @@ def _moon_csv(m, prefix):
 
 def _window_row_dict(site, date, result, cfg, gap_label='', gap_window=''):
     tz_str = cfg['tz']
-    # use window start for offset label; fall back to date midnight if no window
     ref_dt = result['obs_start'] if result['obs_start'] else date
     tz_label = offset_str(ref_dt, tz_str)
     row = {
@@ -690,9 +755,9 @@ def _window_row_dict(site, date, result, cfg, gap_label='', gap_window=''):
     row.update(_moon_csv(result.get('moon_start'), 'start_'))
     row.update(_moon_csv(result.get('moon_mid'), 'mid_'))
 
-    # hidden fields to preserve raw datetime objects for plotting and calendar export
+    # preserve raw datetime objects for plotting and calendar export
     row['_obs_start_dt'] = result['obs_start']
-    row['_obs_end_dt'] = result['obs_end']
+    row['_obs_end_dt']   = result['obs_end']
 
     return row
 
@@ -713,10 +778,10 @@ def save_windows_csv(rows, filename):
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
-    print(f"  saved → {filename}  ({len(rows)} rows)")
+    print(f"  saved -> {filename}  ({len(rows)} rows)")
 
 def save_windows_ics(rows, filename_prefix):
-    """Exports observable windows to .ics calendar files per site."""
+    """exports observable windows to .ics calendar files per site."""
     if not rows: return
     cal_per_site = {}
 
@@ -724,144 +789,79 @@ def save_windows_ics(rows, filename_prefix):
         site = row['site']
         if site not in cal_per_site:
             cal_per_site[site] = Calendar()
-            # standard iCal properties
             cal_per_site[site].add('prodid', '-//Asteroid Observing Scheduler//')
             cal_per_site[site].add('version', '2.0')
 
         start_dt = row.get('_obs_start_dt')
-        end_dt = row.get('_obs_end_dt')
+        end_dt   = row.get('_obs_end_dt')
 
         if start_dt and end_dt:
             e = Event()
             e.add('summary', f"Observe {ASTEROID_NAME} - {row['gap_label']}")
             e.add('dtstart', pytz.utc.localize(start_dt))
-            e.add('dtend', pytz.utc.localize(end_dt))
-
-            description = (f"Moon Illumination: {row.get('start_illum_pct')}%%\n"
-                             f"Moon Altitude: {row.get('start_moon_alt')}°\n"
-                             f"Sky Brightness: {row.get('start_v_sky')} mag/arcsec²\n"
-                             f"Limit Constraint: {row['limit']}")
+            e.add('dtend',   pytz.utc.localize(end_dt))
+            description = (f"Moon Illumination: {row.get('start_illum_pct')}%\n"
+                           f"Moon Altitude: {row.get('start_moon_alt')}°\n"
+                           f"Sky Brightness: {row.get('start_v_sky')} mag/arcsec²\n"
+                           f"Limit Constraint: {row['limit']}")
             e.add('description', description)
-
             cal_per_site[site].add_component(e)
 
     for site, cal in cal_per_site.items():
         safe_site = site.replace(' ', '_').replace('/', '_')
         fname = f"{filename_prefix}_{safe_site}.ics"
-
-        # icalendar writes out as bytes, so we use 'wb' instead of 'w'
         with open(fname, 'wb') as f:
             f.write(cal.to_ical())
-        print(f"Saved calendar: {fname}")
+        print(f"  saved calendar: {fname}")
 
 def plot_observing_timeline(rows):
-    #generates a Gantt-style timeline chart of observing windows
+    """gantt-style timeline chart of observing windows."""
     if not rows: return
-    
-    # prep data
-    data = []
-    for r in rows:
-        if r.get('_obs_start_dt') and r.get('_obs_end_dt'):
-            data.append({
-                'Site': r['site'],
-                'Start': r['_obs_start_dt'],
-                'End': r['_obs_end_dt'],
-                'Duration': (r['_obs_end_dt'] - r['_obs_start_dt']).total_seconds() / 3600
-            })
-    
-    if not data: return
-    df = pd.DataFrame(data)
-    
-    # sort sites to ensure consistent order
-    sites = sorted(df['Site'].unique())
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # create color palette
-    palette = sns.color_palette("husl", len(sites))
-    site_colors = {site: color for site, color in zip(sites, palette)}
+    fig, ax = plt.subplots(figsize=(10, 4))
+    sites  = list(set(r['site'] for r in rows))
+    site_y = {site: i for i, site in enumerate(sites)}
 
-    # plot bars
-    for i, site in enumerate(sites):
-        site_data = df[df['Site'] == site]
-        for _, row in site_data.iterrows():
-            ax.barh(y=i, 
-                    width=row['End'] - row['Start'], 
-                    left=row['Start'], 
-                    height=0.5, 
-                    color=site_colors[site],
-                    edgecolor='black',
-                    linewidth=0.5,
-                    alpha=0.9)
+    for row in rows:
+        start_dt = row.get('_obs_start_dt')
+        end_dt   = row.get('_obs_end_dt')
+        if start_dt and end_dt:
+            duration_days = (end_dt - start_dt).total_seconds() / 86400
+            ax.barh(site_y[row['site']], duration_days,
+                    left=start_dt, height=0.4, color='royalblue')
 
-    # aesthetics
     ax.set_yticks(range(len(sites)))
     ax.set_yticklabels(sites)
-    
-    # format X Axis
-    locator = mdates.AutoDateLocator()
-    formatter = mdates.DateFormatter('%m-%d %H:%M')
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(formatter)
-    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
-    
-    ax.set_xlabel('UTC Time')
-    ax.set_title(f'Observing Windows Timeline: {ASTEROID_NAME}')
-    ax.grid(axis='x', linestyle='--', alpha=0.3)
-    
-    # invert y axis so top site is first
-    ax.invert_yaxis()
-    
-    sns.despine(left=True)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+    plt.xticks(rotation=45)
+    plt.xlabel('UTC Time')
+    plt.title(f'Observing Windows Timeline: {ASTEROID_NAME}')
+    plt.grid(axis='x', linestyle='--', alpha=0.6)
     plt.tight_layout()
-    plt.savefig(f'timeline_{ASTEROID_ID}.png', dpi=300)
+    plt.savefig(f'timeline_{ASTEROID_ID}.png')
     plt.show()
 
 def plot_sky_brightness(rows):
-    #plots lunar sky brightness at the start of each window
+    """plots lunar sky brightness at the start of each window."""
     if not rows: return
-    
-    data = []
-    for r in rows:
-        if r.get('_obs_start_dt') and r.get('start_v_sky'):
-             data.append({
-                'Time': r['_obs_start_dt'],
-                'V_sky': float(r['start_v_sky']),
-                'Site': r['site']
-            })
-    
-    if not data: return
-    df = pd.DataFrame(data)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    sites = list(set(r['site'] for r in rows))
 
-    plt.figure(figsize=(10, 5))
-    
-    sns.lineplot(
-        data=df, 
-        x='Time', 
-        y='V_sky', 
-        hue='Site', 
-        markers=True,
-        style='Site',
-        dashes=False,
-        linewidth=2,
-        palette='viridis'
-    )
+    for site in sites:
+        site_rows = [r for r in rows
+                     if r['site'] == site and r.get('_obs_start_dt') is not None]
+        if not site_rows: continue
+        times = [r['_obs_start_dt'] for r in site_rows]
+        v_sky = [float(r['start_v_sky']) for r in site_rows if r['start_v_sky']]
+        ax.plot(times, v_sky, marker='o', linestyle='-', label=site)
 
-    ax = plt.gca()
-    locator = mdates.AutoDateLocator()
-    formatter = mdates.DateFormatter('%m-%d')
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(formatter)
-    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
-
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    plt.xticks(rotation=45)
     plt.ylabel('Sky Brightness (V mag/arcsec²)')
     plt.title(f'Sky Brightness at Window Start: {ASTEROID_NAME}')
-    
-    plt.gca().invert_yaxis()
-    plt.grid(True, linestyle='--', alpha=0.3)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.legend()
+    plt.grid(linestyle='--', alpha=0.6)
     plt.tight_layout()
-    plt.savefig(f'sky_brightness_{ASTEROID_ID}.png', dpi=300)
+    plt.savefig(f'sky_brightness_{ASTEROID_ID}.png')
     plt.show()
 
 # ==============================================================================
@@ -870,18 +870,19 @@ def plot_sky_brightness(rows):
 
 def main():
 
-    # ── run header ────────────────────────────────────────────────────────────
+    # -- run header ------------------------------------------------------------
     rule()
     print(f"  ASTEROID OBSERVING SCHEDULER")
     print(f"  Target   : {ASTEROID_ID} {ASTEROID_NAME}")
     print(f"  Dates    : {DATE_START.strftime('%Y-%m-%d')}  to  "
           f"{(DATE_START + timedelta(days=N_DAYS-1)).strftime('%Y-%m-%d')}  "
           f"({N_DAYS} nights)")
+    print(f"  Phase    : BJD_TDB + LTTC  (T0 must be in same standard)")
     if USE_LIGHTCURVE:
         gap_dur_h     = (GAP_END_PH - GAP_START_PH) * PERIOD_H
         drift_min_day = ((24.0 / PERIOD_H) % 1.0) * PERIOD_H * 60
         print(f"  Mode     : phase gap filter ON")
-        print(f"  T0       : JD {T0_JD}   Period: {PERIOD_H} h")
+        print(f"  T0       : BJD_TDB {T0_JD}   Period: {PERIOD_H} h")
         print(f"  Gap      : phase {GAP_START_PH} – {GAP_END_PH}  "
               f"({gap_dur_h * 60:.1f} min = "
               f"{int(gap_dur_h)}h {int((gap_dur_h % 1) * 60)}m)  "
@@ -892,7 +893,7 @@ def main():
     print(f"  Sky model: Krisciunas-Schaefer (1991)   k = {EXTINCTION_K}")
     rule()
 
-    # ── ephemeris ─────────────────────────────────────────────────────────────
+    # -- ephemeris -------------------------------------------------------------
     print()
     primary_cfg = SITES[PRIMARY_SITE]
     eph_table   = query_ephemeris(
@@ -901,20 +902,22 @@ def main():
     )
 
     print()
-    section(f"EPHEMERIS  ·  {ASTEROID_ID} {ASTEROID_NAME}  ·  "
-            f"{PRIMARY_SITE} ({primary_cfg['mpc_code']})  ·  step: {EPHEM_STEP}")
+    section(f"EPHEMERIS  .  {ASTEROID_ID} {ASTEROID_NAME}  .  "
+            f"{PRIMARY_SITE} ({primary_cfg['mpc_code']})  .  step: {EPHEM_STEP}")
     print()
     print_ephem_table(eph_table, EPHEM_STEP)
     print()
     if SAVE_CSV:
         save_ephem_csv(eph_table, CSV_EPHEM)
 
-    radec_lookup = build_radec_lookup(eph_table)
+    # build unified lookup: (dt, ra_deg, dec_deg, delta_au)
+    # used by both interpolate_radec (ephem strings) and interpolate_position (degrees + delta)
+    radec_delta_lookup = build_radec_delta_lookup(eph_table)
 
-    # ── observing windows ─────────────────────────────────────────────────────
+    # -- observing windows -----------------------------------------------------
     all_rows = []
 
-    tf = TimezoneFinder()
+    tf_finder = TimezoneFinder()
     for site_name, cfg in SITES.items():
         obs = make_obs(cfg)
 
@@ -922,15 +925,13 @@ def main():
                      if isinstance(DARK_SKY_MAG, dict)
                      else float(DARK_SKY_MAG))
 
-        # auto-lookup timezone if missing
+        # auto-lookup timezone if not set
         if 'tz' not in cfg:
-            cfg['tz'] = tf.timezone_at(lng=cfg['lon'], lat=cfg['lat'])
+            cfg['tz'] = tf_finder.timezone_at(lng=cfg['lon'], lat=cfg['lat'])
         tz_str = cfg['tz']
 
         lat_str = f"{abs(cfg['lat']):.4f}° {'N' if cfg['lat'] >= 0 else 'S'}"
         lon_str = f"{abs(cfg['lon']):.4f}° {'E' if cfg['lon'] >= 0 else 'W'}"
-
-        # show the utc offset as of the campaign start date (informational)
         tz_label_start = offset_str(DATE_START, tz_str)
 
         print()
@@ -949,11 +950,15 @@ def main():
 
                 for day_offset in range(N_DAYS):
                     d = DATE_START + timedelta(days=day_offset)
-                    g1s, g1e, g2s, g2e = gap_occurrences(d)
+
+                    # phase uses BJD_TDB+LTTC via the primary site's location
+                    g1s, g1e, g2s, g2e = gap_occurrences(
+                        d, radec_delta_lookup, primary_cfg
+                    )
                     gs, ge = (g2s, g2e) if use_gap2 else (g1s, g1e)
 
                     result      = compute_window(
-                        obs, d, cfg, radec_lookup, site_dark,
+                        obs, d, cfg, radec_delta_lookup, site_dark,
                         gap_s=gs, gap_e=ge
                     )
                     gap_win_str = f"{hm(gs)}-{hm(ge)}"
@@ -969,22 +974,20 @@ def main():
 
             for day_offset in range(N_DAYS):
                 d      = DATE_START + timedelta(days=day_offset)
-                result = compute_window(obs, d, cfg, radec_lookup, site_dark)
+                result = compute_window(obs, d, cfg, radec_delta_lookup, site_dark)
                 print_window_row(d, result, cfg)
                 all_rows.append(
                     _window_row_dict(site_name, d, result, cfg)
                 )
 
-    # ── save windows csv ──────────────────────────────────────────────────────
+    # -- save windows CSV ------------------------------------------------------
     print()
-
     rule()
 
     if SAVE_CSV:
         save_windows_csv(all_rows, CSV_WINDOWS)
         print(f"\n  >> saved windows to {CSV_WINDOWS}")
 
-    #generate calendars and plots
     print("\nGenerating actionable outputs...")
     save_windows_ics(all_rows, f"windows_{ASTEROID_ID}")
     plot_observing_timeline(all_rows)
