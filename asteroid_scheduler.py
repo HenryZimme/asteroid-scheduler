@@ -5,9 +5,10 @@ with Krisciunas-Schaefer (1991) lunar sky brightness model
 queries MPC via astroquery.mpc.MPC.get_ephemeris, computes visibility
 windows at each site (twilight, altitude), optionally constrains to a
 lightcurve phase gap, and reports lunar sky brightness at window start
-and midpoint. local times shown alongside UTC using per-site offsets.
+and midpoint. local times are shown alongside UTC using zoneinfo (stdlib)
+with the tzdata package for DST handling — no manual offset updates needed.
 
-install: pip install astroquery astropy ephem
+install: pip install astroquery astropy ephem tzdata
 """
 
 # ==============================================================================
@@ -20,8 +21,8 @@ ASTEROID_NAME = 'Cindygraber'
 
 # --- date range ---
 from datetime import datetime, timedelta
-DATE_START = datetime(2026, 3, 1)
-N_DAYS     = 10
+DATE_START = datetime.now() # or use datetime(year, month, day), ex. datetime(2026, 3, 1) for March 1, 2026
+N_DAYS     = 15
 
 # --- ephemeris sampling ---
 # step passed to MPC.get_ephemeris. examples: '1d', '6h', '1h', '30min'
@@ -30,39 +31,40 @@ N_DAYS     = 10
 EPHEM_STEP = '1h'
 
 # resolution for altitude/moon stepping in the window calculator (minutes)
+# ideally don't go below 10 minutes for altitude step unless planning a long, computationally intensive campaign
 ALT_STEP_MINUTES = 1
 
 # --- observing sites ---
-# time_offset: hours from UTC (e.g. -5 = EST, +11 = AEDT)
-# update seasonally for sites that observe daylight saving time. current settings are set to March 1, 2026
+# tz: IANA timezone string — DST is handled automatically, no seasonal edits needed.
+# find your string at: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 SITES = {
     'G40 Canary 1': {
-        'lat':         28.29970,
-        'lon':        -16.5082,
-        'elev':        2390,
-        'mpc_code':   'G40',
-        'time_offset': 0,       # WET (winter); change to +1 for summer
+        'lat':      28.29970,
+        'lon':     -16.5082,
+        'elev':     2390,
+        'mpc_code': 'G40',
+        'tz':       'Atlantic/Canary',   # WET/WEST, auto DST
     },
     'W88 Chile 2': {
-        'lat':         -33.269,
-        'lon':         -70.53,
-        'elev':        1492,
-        'mpc_code':   'W88',
-        'time_offset': -3,      # CLST (summer); change to -4 for winter
+        'lat':      -33.269,
+        'lon':      -70.53,
+        'elev':     1492,
+        'mpc_code': 'W88',
+        'tz':       'America/Santiago',  # CLT/CLST, auto DST
     },
     'E62 Australia 1': {
-        'lat':         -31.2816709,
-        'lon':         149.0801825,
-        'elev':        805,
-        'mpc_code':   'E62',
-        'time_offset': 11,      # AEDT (summer); change to 10 for winter
+        'lat':      -31.2816709,
+        'lon':      149.0801825,
+        'elev':     805,
+        'mpc_code': 'E62',
+        'tz':       'Australia/Sydney',  # AEST/AEDT, auto DST
     },
     'I12 Phillips Academy Observatory': {
-        'lat':         42.647611,
-        'lon':        -71.129,
-        'elev':        80,
-        'mpc_code':   'I12',
-        'time_offset': -5,      # EST (winter); change to -4 for summer
+        'lat':      42.647611,
+        'lon':     -71.129,
+        'elev':     80,
+        'mpc_code': 'I12',
+        'tz':       'America/New_York',  # EST/EDT, auto DST
     },
 }
 
@@ -77,9 +79,9 @@ MIN_ALT_DEG = 20.0
 # typical: excellent site ~22.0, good ~21.5, average ~21.0
 # either a single float (all sites) or a dict keyed by site name.
 DARK_SKY_MAG = {
-    'G40 Canary 1':                    21.9,
-    'E62 Australia 1':                 21.7,
-    'W88 Chile 2':                     21.8,
+    'G40 Canary 1':                     21.9,
+    'E62 Australia 1':                  21.7,
+    'W88 Chile 2':                      21.8,
     'I12 Phillips Academy Observatory': 20.5,
 }
 
@@ -116,7 +118,9 @@ CSV_WINDOWS = f'windows_{ASTEROID_ID}.csv'
 import ephem
 import math
 import csv
+from zoneinfo import ZoneInfo
 from astroquery.mpc import MPC
+import pytz
 
 # ==============================================================================
 # CELL 3 — EPHEMERIS QUERY
@@ -203,14 +207,29 @@ def dark_window(obs, date, gap_s=None):
         dark_e = morning_dawn(obs, date + timedelta(days=1))
     return dark_s, dark_e
 
-def utc_to_local(dt, time_offset):
-    """convert utc datetime to local time using a fixed hour offset"""
-    return dt + timedelta(hours=time_offset)
+def utc_to_local(dt, tz_str):
+    """
+    convert a naive UTC datetime to a timezone-aware local datetime.
+    DST transitions are handled automatically by pytz.
+    """
+    utc_dt = pytz.utc.localize(dt)
+    return utc_dt.astimezone(pytz.timezone(tz_str))
 
-def offset_str(time_offset):
-    """format time offset as UTC+X or UTC-X"""
-    sign = '+' if time_offset >= 0 else ''
-    return f"UTC{sign}{time_offset}"
+def offset_str(dt, tz_str):
+    """
+    return the UTC offset string for a given UTC datetime and IANA tz string.
+    reflects actual DST state at that moment, e.g. 'UTC-4' in EDT, 'UTC-5' in EST.
+    dt should be a naive UTC datetime.
+    """
+    local = utc_to_local(dt, tz_str)
+    offset_secs = int(local.utcoffset().total_seconds())
+    hours = offset_secs // 3600
+    mins  = abs(offset_secs % 3600) // 60
+    if mins:
+        sign = '+' if hours >= 0 else '-'
+        return f"UTC{sign}{abs(hours)}:{mins:02d}"
+    sign = '+' if hours >= 0 else ''
+    return f"UTC{sign}{hours}"
 
 # ==============================================================================
 # CELL 5 — RA/Dec INTERPOLATION FROM MPC TABLE
@@ -437,12 +456,14 @@ W = 92   # console width
 def hm(dt):
     return dt.strftime('%H:%M') if dt else '—'
 
-def hm_local(dt, offset):
-    """format time as HH:MM local, noting date change if needed"""
+def hm_local(dt, tz_str):
+    """
+    format a naive UTC datetime as HH:MM in the site's local timezone.
+    DST offset is computed at the actual moment dt, not a fixed integer.
+    """
     if dt is None:
         return '—'
-    local = utc_to_local(dt, offset)
-    return local.strftime('%H:%M')
+    return utc_to_local(dt, tz_str).strftime('%H:%M')
 
 def rule(char='=', width=W):
     print(char * width)
@@ -527,14 +548,16 @@ def save_ephem_csv(eph_table, filename):
 
 def print_window_row(date, result, cfg, gap_window=''):
     """print window row with UTC and local times, plus moon sub-line"""
-    offset = cfg['time_offset']
+    tz_str = cfg['tz']
     mins   = result['minutes']
 
     if mins > 0:
+        # compute the utc offset string at the actual window start time
+        tz_label  = offset_str(result['obs_start'], tz_str)
         utc_rng   = f"{hm(result['obs_start'])} – {hm(result['obs_end'])} UTC"
-        local_rng = (f"{hm_local(result['obs_start'], offset)} – "
-                     f"{hm_local(result['obs_end'],   offset)} "
-                     f"local ({offset_str(offset)})")
+        local_rng = (f"{hm_local(result['obs_start'], tz_str)} – "
+                     f"{hm_local(result['obs_end'],   tz_str)} "
+                     f"local ({tz_label})")
         alt_rng   = (f"{result['alt_start']:.0f}° → {result['alt_end']:.0f}°"
                      if result['alt_start'] is not None else '—')
         lim       = result['limit']
@@ -588,7 +611,10 @@ def _moon_csv(m, prefix):
     }
 
 def _window_row_dict(site, date, result, cfg, gap_label='', gap_window=''):
-    offset = cfg['time_offset']
+    tz_str = cfg['tz']
+    # use window start for offset label; fall back to date midnight if no window
+    ref_dt = result['obs_start'] if result['obs_start'] else date
+    tz_label = offset_str(ref_dt, tz_str)
     row = {
         'site':            site,
         'date':            date.strftime('%Y-%m-%d'),
@@ -596,9 +622,9 @@ def _window_row_dict(site, date, result, cfg, gap_label='', gap_window=''):
         'gap_window':      gap_window,
         'obs_start_utc':   hm(result['obs_start']),
         'obs_end_utc':     hm(result['obs_end']),
-        'obs_start_local': hm_local(result['obs_start'], offset),
-        'obs_end_local':   hm_local(result['obs_end'],   offset),
-        'time_offset':     offset_str(offset),
+        'obs_start_local': hm_local(result['obs_start'], tz_str),
+        'obs_end_local':   hm_local(result['obs_end'],   tz_str),
+        'time_offset':     tz_label,
         'duration_min':    result['minutes'],
         'alt_start':       f"{result['alt_start']:.1f}" if result['alt_start'] is not None else '',
         'alt_end':         f"{result['alt_end']:.1f}"   if result['alt_end']   is not None else '',
@@ -688,15 +714,18 @@ def main():
                      if isinstance(DARK_SKY_MAG, dict)
                      else float(DARK_SKY_MAG))
 
-        offset     = cfg['time_offset']
-        lat_str    = f"{abs(cfg['lat']):.4f}° {'N' if cfg['lat'] >= 0 else 'S'}"
-        lon_str    = f"{abs(cfg['lon']):.4f}° {'E' if cfg['lon'] >= 0 else 'W'}"
+        tz_str  = cfg['tz']
+        lat_str = f"{abs(cfg['lat']):.4f}° {'N' if cfg['lat'] >= 0 else 'S'}"
+        lon_str = f"{abs(cfg['lon']):.4f}° {'E' if cfg['lon'] >= 0 else 'W'}"
+
+        # show the utc offset as of the campaign start date (informational)
+        tz_label_start = offset_str(DATE_START, tz_str)
 
         print()
         section(f"SITE: {site_name.upper()}")
         print(f"  Location  : {lat_str}   {lon_str}   {cfg['elev']} m")
         print(f"  MPC code  : {cfg['mpc_code']}")
-        print(f"  Time zone : {offset_str(offset)}")
+        print(f"  Time zone : {tz_str}  ({tz_label_start} at campaign start)")
         print(f"  Dark sky  : {site_dark} mag/arcsec²")
         rule('-')
 
