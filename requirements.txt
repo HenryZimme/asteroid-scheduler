@@ -1,5 +1,7 @@
-astroquery>=0.4.6
-astropy>=5.0
-ephem>=4.1
-pytz>2025.2
-tzdata>2025.3
+astroquery==0.4.11
+ephem==4.2.1
+pytz==2025.2
+tzdata==2025.3
+icalendar==7.0.2
+timezonefinder==8.2.1
+matplotlib==3.10.0
