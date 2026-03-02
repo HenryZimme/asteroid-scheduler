@@ -17,11 +17,11 @@ install: pip install astroquery astropy ephem tzdata
 
 # --- target ---
 # ex 1: standard main belt (7605 Cindygraber)
-'''ASTEROID_ID   = '7605'
+ASTEROID_ID   = '7605'
 ASTEROID_NAME = 'Cindygraber'
 T0_JD        = 2461084.655574
 PERIOD_H     = 11.939
-PERIOD_ERR_H = 0.001  # added: period uncertainty in hours #'''
+PERIOD_ERR_H = 0.005  # added: period uncertainty in hours #'''
 
 #ex 2: fast rotator / faint target (uncomment to test)
 '''ASTEROID_ID   = '1998 KY26'
@@ -31,7 +31,7 @@ PERIOD_H     = 0.0891933333  # 5.3 minutes!
 PERIOD_ERR_H = 0.000001#'''
 
 # ex 3: bright / slow rotator (uncomment to test)
-ASTEROID_ID   = '343'
+'''ASTEROID_ID   = '343'
 ASTEROID_NAME = 'Ostara'
 T0_JD        = 2452900.0
 PERIOD_H     = 109.9
@@ -54,7 +54,6 @@ ALT_STEP_MINUTES = 1
 
 # --- observing sites ---
 # tz: IANA timezone string — DST is handled automatically, no seasonal edits needed.
-# find your string at: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 SITES = {
     'G40 Canary 1': {
         'lat':      28.29970,
@@ -135,6 +134,8 @@ CSV_WINDOWS = f'windows_{ASTEROID_ID}.csv'
 import ephem
 import math
 import csv
+import pandas as pd
+import seaborn as sns
 from zoneinfo import ZoneInfo
 from astroquery.mpc import MPC
 import pytz
@@ -383,7 +384,7 @@ def utc_to_jd(dt):
     return 2451545.0 + (dt - J2000).total_seconds() / 86400.0
 
 def gap_occurrences(date):
-    """Calculates gap occurrences with phase uncertainty propagation."""
+    """calculates gap occurrences with phase uncertainty propagation."""
     # propagate uncertainty based on time elapsed since T0
     days_since_t0 = utc_to_jd(date) - T0_JD
     cycles = (days_since_t0 * 24.0) / PERIOD_H
@@ -456,8 +457,7 @@ def compute_window(obs_site, date, cfg, radec_lookup,
         t_mid    = t_s + (t_e - t_s) / 2
         ra_s,  dec_s = interpolate_radec(radec_lookup, t_s)
         ra_m,  dec_m = interpolate_radec(radec_lookup, t_mid)
-        # get the specific extinction for this site, fallback to 0.172 if not in dict
-        k_val = EXTINCTION_K.get(obs_site, 0.172)
+        k_val = EXTINCTION_K.get(obs_site, 0.172) # get the specific extinction for this site, fallback to 0.172 if not in dict
         result.update({
             'obs_start':  t_s,
             'obs_end':    t_e,
@@ -465,8 +465,6 @@ def compute_window(obs_site, date, cfg, radec_lookup,
             'alt_start':  a_s,
             'alt_end':    a_e,
             'limit':      _limit(t_e, gap_e, dark_e),
-
-            #note: If your site name variable is just 'site' or 'site['name']', use that instead of 'site_name'
 
             'moon_start': lunar_sky_brightness(
                               obs_site, t_s,   ra_s, dec_s, dark_sky_mag, k=k_val),
@@ -493,6 +491,24 @@ def _limit(obs_end, gap_end, dawn):
 # ==============================================================================
 # CELL 8 — DISPLAY AND CSV
 # ==============================================================================
+
+def set_pub_style():
+    sns.set_theme(style="ticks", context="paper")
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "DejaVu Serif"],
+        "mathtext.fontset": "stix",
+        "axes.labelsize": 14,
+        "axes.titlesize": 14,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "xtick.direction": "in",
+        "ytick.direction": "in",
+        "lines.linewidth": 1.5,
+        "figure.dpi": 300
+    })
+
+set_pub_style()
 
 W = 92   # console width
 
@@ -638,7 +654,7 @@ def print_window_header(with_gap=False):
           f"{'Altitude':<13}  Limit")
     print("  " + "-" * (W - 2))
 
-# --- CSV for windows ---------------------------------------------------------
+# --- csv for windows ---------------------------------------------------------
 
 def _moon_csv(m, prefix):
     if m is None:
@@ -721,7 +737,7 @@ def save_windows_ics(rows, filename_prefix):
             e.add('dtstart', pytz.utc.localize(start_dt))
             e.add('dtend', pytz.utc.localize(end_dt))
 
-            description = (f"Moon Illumination: {row.get('start_illum_pct')}%\n"
+            description = (f"Moon Illumination: {row.get('start_illum_pct')}%%\n"
                              f"Moon Altitude: {row.get('start_moon_alt')}°\n"
                              f"Sky Brightness: {row.get('start_v_sky')} mag/arcsec²\n"
                              f"Limit Constraint: {row['limit']}")
@@ -741,50 +757,111 @@ def save_windows_ics(rows, filename_prefix):
 def plot_observing_timeline(rows):
     #generates a Gantt-style timeline chart of observing windows
     if not rows: return
-    fig, ax = plt.subplots(figsize=(10, 4))
-    sites = list(set(r['site'] for r in rows))
-    site_y = {site: i for i, site in enumerate(sites)}
+    
+    # prep data
+    data = []
+    for r in rows:
+        if r.get('_obs_start_dt') and r.get('_obs_end_dt'):
+            data.append({
+                'Site': r['site'],
+                'Start': r['_obs_start_dt'],
+                'End': r['_obs_end_dt'],
+                'Duration': (r['_obs_end_dt'] - r['_obs_start_dt']).total_seconds() / 3600
+            })
+    
+    if not data: return
+    df = pd.DataFrame(data)
+    
+    # sort sites to ensure consistent order
+    sites = sorted(df['Site'].unique())
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # create color palette
+    palette = sns.color_palette("husl", len(sites))
+    site_colors = {site: color for site, color in zip(sites, palette)}
 
-    for row in rows:
-        start_dt = row.get('_obs_start_dt')
-        end_dt = row.get('_obs_end_dt')
-        if start_dt and end_dt:
-            duration_days = (end_dt - start_dt).total_seconds() / 86400
-            ax.barh(site_y[row['site']], duration_days, left=start_dt, height=0.4, color='royalblue')
+    # plot bars
+    for i, site in enumerate(sites):
+        site_data = df[df['Site'] == site]
+        for _, row in site_data.iterrows():
+            ax.barh(y=i, 
+                    width=row['End'] - row['Start'], 
+                    left=row['Start'], 
+                    height=0.5, 
+                    color=site_colors[site],
+                    edgecolor='black',
+                    linewidth=0.5,
+                    alpha=0.9)
 
+    # aesthetics
     ax.set_yticks(range(len(sites)))
     ax.set_yticklabels(sites)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-    plt.xticks(rotation=45)
-    plt.xlabel('UTC Time')
-    plt.title(f'Observing Windows Timeline: {ASTEROID_NAME}')
-    plt.grid(axis='x', linestyle='--', alpha=0.6)
+    
+    # format X Axis
+    locator = mdates.AutoDateLocator()
+    formatter = mdates.DateFormatter('%m-%d %H:%M')
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+    
+    ax.set_xlabel('UTC Time')
+    ax.set_title(f'Observing Windows Timeline: {ASTEROID_NAME}')
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    
+    # invert y axis so top site is first
+    ax.invert_yaxis()
+    
+    sns.despine(left=True)
     plt.tight_layout()
-    plt.savefig(f'timeline_{ASTEROID_ID}.png')
+    plt.savefig(f'timeline_{ASTEROID_ID}.png', dpi=300)
     plt.show()
 
 def plot_sky_brightness(rows):
     #plots lunar sky brightness at the start of each window
     if not rows: return
-    fig, ax = plt.subplots(figsize=(10, 4))
-    sites = list(set(r['site'] for r in rows))
+    
+    data = []
+    for r in rows:
+        if r.get('_obs_start_dt') and r.get('start_v_sky'):
+             data.append({
+                'Time': r['_obs_start_dt'],
+                'V_sky': float(r['start_v_sky']),
+                'Site': r['site']
+            })
+    
+    if not data: return
+    df = pd.DataFrame(data)
 
-    for site in sites:
-        site_rows = [r for r in rows if r['site'] == site and r.get('_obs_start_dt') is not None]
-        if not site_rows: continue
+    plt.figure(figsize=(10, 5))
+    
+    sns.lineplot(
+        data=df, 
+        x='Time', 
+        y='V_sky', 
+        hue='Site', 
+        markers=True,
+        style='Site',
+        dashes=False,
+        linewidth=2,
+        palette='viridis'
+    )
 
-        times = [r['_obs_start_dt'] for r in site_rows]
-        v_sky = [float(r['start_v_sky']) for r in site_rows if r['start_v_sky']]
-        ax.plot(times, v_sky, marker='o', linestyle='-', label=site)
+    ax = plt.gca()
+    locator = mdates.AutoDateLocator()
+    formatter = mdates.DateFormatter('%m-%d')
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
 
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-    plt.xticks(rotation=45)
     plt.ylabel('Sky Brightness (V mag/arcsec²)')
     plt.title(f'Sky Brightness at Window Start: {ASTEROID_NAME}')
-    plt.legend()
-    plt.grid(linestyle='--', alpha=0.6)
+    
+    plt.gca().invert_yaxis()
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-    plt.savefig(f'sky_brightness_{ASTEROID_ID}.png')
+    plt.savefig(f'sky_brightness_{ASTEROID_ID}.png', dpi=300)
     plt.show()
 
 # ==============================================================================
@@ -898,7 +975,7 @@ def main():
                     _window_row_dict(site_name, d, result, cfg)
                 )
 
-    # ── save windows CSV ──────────────────────────────────────────────────────
+    # ── save windows csv ──────────────────────────────────────────────────────
     print()
 
     rule()
