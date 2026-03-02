@@ -16,17 +16,26 @@ install: pip install astroquery astropy ephem tzdata
 # ==============================================================================
 
 # --- target ---
-# example 1: standard main belt (7605 Cindygraber)
-ASTEROID_ID   = '7605'
+# ex 1: standard main belt (7605 Cindygraber)
+'''ASTEROID_ID   = '7605'
 ASTEROID_NAME = 'Cindygraber'
 T0_JD        = 2461084.655574
 PERIOD_H     = 11.939
+PERIOD_ERR_H = 0.001  # added: period uncertainty in hours #'''
 
-# example 2: fast rotator / faint Target (Uncomment to test)
-# ASTEROID_ID   = '1998 KY26'
-# ASTEROID_NAME = '1998 KY26'
-# T0_JD        = 2451000.0
-# PERIOD_H     = 0.0891933333  # 5.3 minutes!
+#ex 2: fast rotator / faint target (uncomment to test)
+'''ASTEROID_ID   = '1998 KY26'
+ASTEROID_NAME = '1998 KY26'
+T0_JD        = 2451000.0
+PERIOD_H     = 0.0891933333  # 5.3 minutes!
+PERIOD_ERR_H = 0.000001#'''
+
+# ex 3: bright / slow rotator (uncomment to test)
+ASTEROID_ID   = '343'
+ASTEROID_NAME = 'Ostara'
+T0_JD        = 2452900.0
+PERIOD_H     = 109.9
+PERIOD_ERR_H = 0.52#'''
 
 # --- date range ---
 from datetime import datetime, timedelta
@@ -90,20 +99,23 @@ DARK_SKY_MAG = {
     'I12 Phillips Academy Observatory': 20.5,
 }
 
-# V-band extinction coefficient (mag/airmass)
-# typical sea-level ~0.20, high-altitude good site ~0.15-0.17
-EXTINCTION_K = 0.172
+# v-band extinction coefficient (mag/airmass)
+# converted to a site-specific dict to handle varying elevations/climates
+EXTINCTION_K = {
+    'G40 Canary 1':                     0.15,  # high altitude, dry
+    'W88 Chile 2':                      0.15,  # high alt, dry
+    'E62 Australia 1':                  0.20,  # mid alt
+    'I12 Phillips Academy Observatory': 0.25,  # sea level, humid/suburban
+}
 
-# sky brightness quality thresholds (mag/arcsec^2, higher = darker = better)
-SKY_EXCELLENT = 21.5
-SKY_GOOD      = 20.5
-SKY_FAIR      = 19.5
-# below SKY_FAIR → 'Poor'
+# NOTE: categorical sky brightness labels have been removed as requested by peer feedback.
+# the tool will directly output physical mag/arcsec^2 values.
+
 
 # --- lightcurve parameters ---
 # USE_LIGHTCURVE = False  →  full visibility window per night (no phase filter)
 # USE_LIGHTCURVE = True   →  windows further restricted to the phase gap;
-#                            Gap 1 and Gap 2 shown separately
+#                            gap 1 and gap 2 shown separately
 USE_LIGHTCURVE = True
 
 T0_JD        = 2461084.655574   # JDo(LTC) from lightcurve plot: epoch of phase 0.0
@@ -240,6 +252,12 @@ def offset_str(dt, tz_str):
     sign = '+' if hours >= 0 else ''
     return f"UTC{sign}{hours}"
 
+tf = TimezoneFinder()
+
+def get_site_tz(lat, lon):
+    """Auto-lookup IANA timezone string from coordinates."""
+    return tf.timezone_at(lat=lat, lng=lon)
+
 # ==============================================================================
 # CELL 5 — RA/Dec INTERPOLATION FROM MPC TABLE
 # ==============================================================================
@@ -293,18 +311,14 @@ def _airmass(alt_deg):
     z_rad = math.radians(max(0.0, 90.0 - alt_deg))
     return 1.0 / (math.cos(z_rad) + 0.025 * math.exp(-11.0 * math.cos(z_rad)))
 
-def _sky_label(v_sky):
-    if v_sky >= SKY_EXCELLENT: return 'Excellent'
-    if v_sky >= SKY_GOOD:      return 'Good'
-    if v_sky >= SKY_FAIR:      return 'Fair'
-    return 'Poor'
 
-def lunar_sky_brightness(obs, dt, ra_str, dec_str, dark_sky_mag, k=EXTINCTION_K):
+def lunar_sky_brightness(obs, dt, ra_str, dec_str, dark_sky_mag, k=0.172):
+    # k defaults to 0.172 if not explicitly passed
     """
     compute total V-band sky brightness at the target position.
     Krisciunas & Schaefer (1991) PASP 103, 1033.
 
-    returns dict: illum_pct, moon_alt, separation, V_sky, sky_label, moon_up
+    returns dict: illum_pct, moon_alt, separation, V_sky, moon_up
     """
     obs.date = dt.strftime('%Y/%m/%d %H:%M:%S')
 
@@ -356,7 +370,6 @@ def lunar_sky_brightness(obs, dt, ra_str, dec_str, dark_sky_mag, k=EXTINCTION_K)
         'moon_alt':   moon_alt,
         'separation': sep_deg,
         'V_sky':      V_sky,
-        'sky_label':  _sky_label(V_sky),
         'moon_up':    moon_up,
     }
 
@@ -370,15 +383,31 @@ def utc_to_jd(dt):
     return 2451545.0 + (dt - J2000).total_seconds() / 86400.0
 
 def gap_occurrences(date):
-    """both gap occurrence datetimes for a given UTC date (midnight = start)"""
+    """Calculates gap occurrences with phase uncertainty propagation."""
+    # propagate uncertainty based on time elapsed since T0
+    days_since_t0 = utc_to_jd(date) - T0_JD
+    cycles = (days_since_t0 * 24.0) / PERIOD_H
+    accumulated_error_h = cycles * PERIOD_ERR_H
+
     gap_dur_h = (GAP_END_PH - GAP_START_PH) * PERIOD_H
     ph_mn     = ((utc_to_jd(date) - T0_JD) * 24.0 / PERIOD_H) % 1.0
     dp        = (GAP_START_PH - ph_mn) % 1.0
+
+    # nominal times
     g1s = date + timedelta(hours=dp * PERIOD_H)
-    g1e = g1s  + timedelta(hours=gap_dur_h)
-    g2s = g1s  + timedelta(hours=PERIOD_H)
-    g2e = g1e  + timedelta(hours=PERIOD_H)
-    return g1s, g1e, g2s, g2e
+    g1e = g1s + timedelta(hours=gap_dur_h)
+    g2s = g1s + timedelta(hours=PERIOD_H)
+    g2e = g1e + timedelta(hours=PERIOD_H)
+
+    # expand window boundaries considering +/- accumulated drift
+    g1s_min = g1s - timedelta(hours=accumulated_error_h)
+    g1e_max = g1e + timedelta(hours=accumulated_error_h)
+    g2s_min = g2s - timedelta(hours=accumulated_error_h)
+    g2e_max = g2e + timedelta(hours=accumulated_error_h)
+
+    # by returning expanded windows, you ensure the observer doesn't miss the
+    # gap even if the physical rotation period has drifted from the nominal value.
+    return g1s_min, g1e_max, g2s_min, g2e_max
 
 def step_through(obs_site, win_s, win_e, radec_lookup):
     if win_s >= win_e:
@@ -427,6 +456,8 @@ def compute_window(obs_site, date, cfg, radec_lookup,
         t_mid    = t_s + (t_e - t_s) / 2
         ra_s,  dec_s = interpolate_radec(radec_lookup, t_s)
         ra_m,  dec_m = interpolate_radec(radec_lookup, t_mid)
+        # get the specific extinction for this site, fallback to 0.172 if not in dict
+        k_val = EXTINCTION_K.get(obs_site, 0.172)
         result.update({
             'obs_start':  t_s,
             'obs_end':    t_e,
@@ -434,10 +465,13 @@ def compute_window(obs_site, date, cfg, radec_lookup,
             'alt_start':  a_s,
             'alt_end':    a_e,
             'limit':      _limit(t_e, gap_e, dark_e),
+
+            #note: If your site name variable is just 'site' or 'site['name']', use that instead of 'site_name'
+
             'moon_start': lunar_sky_brightness(
-                              obs_site, t_s,   ra_s, dec_s, dark_sky_mag),
+                              obs_site, t_s,   ra_s, dec_s, dark_sky_mag, k=k_val),
             'moon_mid':   lunar_sky_brightness(
-                              obs_site, t_mid, ra_m, dec_m, dark_sky_mag),
+                              obs_site, t_mid,   ra_m, dec_m, dark_sky_mag, k=k_val),
         })
     else:
         if win_s >= win_e:
@@ -497,7 +531,6 @@ def _moon_line(ms, mm):
             return f"  {label}: —"
         alt_str = f"{m['moon_alt']:>4.0f}° up" if m['moon_up'] else "      down"
         return (f"  {label}: {m['V_sky']:>5.2f} mag/\"  "
-                f"{m['sky_label']:<9}"
                 f"sep {m['separation']:>4.0f}°  "
                 f"moon {alt_str}")
 
@@ -610,10 +643,9 @@ def print_window_header(with_gap=False):
 def _moon_csv(m, prefix):
     if m is None:
         return {f'{prefix}{k}': '' for k in
-                ['v_sky', 'sky_label', 'illum_pct', 'moon_alt', 'separation']}
+                ['v_sky', 'illum_pct', 'moon_alt', 'separation']}
     return {
         f'{prefix}v_sky':      f"{m['V_sky']:.2f}",
-        f'{prefix}sky_label':  m['sky_label'],
         f'{prefix}illum_pct':  f"{m['illum_pct']:.1f}",
         f'{prefix}moon_alt':   f"{m['moon_alt']:.1f}",
         f'{prefix}separation': f"{m['separation']:.1f}",
@@ -656,9 +688,9 @@ def save_windows_csv(rows, filename):
         'obs_start_utc', 'obs_end_utc',
         'obs_start_local', 'obs_end_local', 'time_offset',
         'duration_min', 'alt_start', 'alt_end', 'limit',
-        'start_v_sky', 'start_sky_label', 'start_illum_pct',
+        'start_v_sky',  'start_illum_pct',
         'start_moon_alt', 'start_separation',
-        'mid_v_sky',   'mid_sky_label',   'mid_illum_pct',
+        'mid_v_sky', 'mid_illum_pct',
         'mid_moon_alt',   'mid_separation',
     ]
     with open(filename, 'w', newline='') as f:
@@ -781,10 +813,6 @@ def main():
         print(f"  Mode     : full visibility window (no phase filter)")
     print(f"  Alt min  : > {MIN_ALT_DEG:.0f}°   step: {ALT_STEP_MINUTES} min")
     print(f"  Sky model: Krisciunas-Schaefer (1991)   k = {EXTINCTION_K}")
-    print(f"  Quality  : Excellent ≥ {SKY_EXCELLENT}  "
-          f"Good ≥ {SKY_GOOD}  "
-          f"Fair ≥ {SKY_FAIR}  "
-          f"Poor < {SKY_FAIR}  (mag/arcsec²)")
     rule()
 
     # ── ephemeris ─────────────────────────────────────────────────────────────
@@ -886,7 +914,6 @@ def main():
     plot_sky_brightness(all_rows)
 
     rule()
-
 
 if __name__ == '__main__':
     main()
