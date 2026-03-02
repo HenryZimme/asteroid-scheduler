@@ -16,8 +16,17 @@ install: pip install astroquery astropy ephem tzdata
 # ==============================================================================
 
 # --- target ---
+# example 1: standard main belt (7605 Cindygraber)
 ASTEROID_ID   = '7605'
 ASTEROID_NAME = 'Cindygraber'
+T0_JD        = 2461084.655574
+PERIOD_H     = 11.939
+
+# example 2: fast rotator / faint Target (Uncomment to test)
+# ASTEROID_ID   = '1998 KY26'
+# ASTEROID_NAME = '1998 KY26'
+# T0_JD        = 2451000.0
+# PERIOD_H     = 0.0891933333  # 5.3 minutes!
 
 # --- date range ---
 from datetime import datetime, timedelta
@@ -43,28 +52,24 @@ SITES = {
         'lon':     -16.5082,
         'elev':     2390,
         'mpc_code': 'G40',
-        'tz':       'Atlantic/Canary',   # WET/WEST, auto DST
     },
     'W88 Chile 2': {
         'lat':      -33.269,
         'lon':      -70.53,
         'elev':     1492,
         'mpc_code': 'W88',
-        'tz':       'America/Santiago',  # CLT/CLST, auto DST
     },
     'E62 Australia 1': {
         'lat':      -31.2816709,
         'lon':      149.0801825,
         'elev':     805,
         'mpc_code': 'E62',
-        'tz':       'Australia/Sydney',  # AEST/AEDT, auto DST
     },
     'I12 Phillips Academy Observatory': {
         'lat':      42.647611,
         'lon':     -71.129,
         'elev':     80,
         'mpc_code': 'I12',
-        'tz':       'America/New_York',  # EST/EDT, auto DST
     },
 }
 
@@ -121,6 +126,10 @@ import csv
 from zoneinfo import ZoneInfo
 from astroquery.mpc import MPC
 import pytz
+from icalendar import Calendar, Event
+from timezonefinder import TimezoneFinder
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 # ==============================================================================
 # CELL 3 — EPHEMERIS QUERY
@@ -631,7 +640,12 @@ def _window_row_dict(site, date, result, cfg, gap_label='', gap_window=''):
         'limit':           result['limit'],
     }
     row.update(_moon_csv(result.get('moon_start'), 'start_'))
-    row.update(_moon_csv(result.get('moon_mid'),   'mid_'))
+    row.update(_moon_csv(result.get('moon_mid'), 'mid_'))
+
+    # hidden fields to preserve raw datetime objects for plotting and calendar export
+    row['_obs_start_dt'] = result['obs_start']
+    row['_obs_end_dt'] = result['obs_end']
+
     return row
 
 def save_windows_csv(rows, filename):
@@ -652,6 +666,94 @@ def save_windows_csv(rows, filename):
         writer.writeheader()
         writer.writerows(rows)
     print(f"  saved → {filename}  ({len(rows)} rows)")
+
+def save_windows_ics(rows, filename_prefix):
+    """Exports observable windows to .ics calendar files per site."""
+    if not rows: return
+    cal_per_site = {}
+
+    for row in rows:
+        site = row['site']
+        if site not in cal_per_site:
+            cal_per_site[site] = Calendar()
+            # standard iCal properties
+            cal_per_site[site].add('prodid', '-//Asteroid Observing Scheduler//')
+            cal_per_site[site].add('version', '2.0')
+
+        start_dt = row.get('_obs_start_dt')
+        end_dt = row.get('_obs_end_dt')
+
+        if start_dt and end_dt:
+            e = Event()
+            e.add('summary', f"Observe {ASTEROID_NAME} - {row['gap_label']}")
+            e.add('dtstart', pytz.utc.localize(start_dt))
+            e.add('dtend', pytz.utc.localize(end_dt))
+
+            description = (f"Moon Illumination: {row.get('start_illum_pct')}%\n"
+                             f"Moon Altitude: {row.get('start_moon_alt')}°\n"
+                             f"Sky Brightness: {row.get('start_v_sky')} mag/arcsec²\n"
+                             f"Limit Constraint: {row['limit']}")
+            e.add('description', description)
+
+            cal_per_site[site].add_component(e)
+
+    for site, cal in cal_per_site.items():
+        safe_site = site.replace(' ', '_').replace('/', '_')
+        fname = f"{filename_prefix}_{safe_site}.ics"
+
+        # icalendar writes out as bytes, so we use 'wb' instead of 'w'
+        with open(fname, 'wb') as f:
+            f.write(cal.to_ical())
+        print(f"Saved calendar: {fname}")
+
+def plot_observing_timeline(rows):
+    #generates a Gantt-style timeline chart of observing windows
+    if not rows: return
+    fig, ax = plt.subplots(figsize=(10, 4))
+    sites = list(set(r['site'] for r in rows))
+    site_y = {site: i for i, site in enumerate(sites)}
+
+    for row in rows:
+        start_dt = row.get('_obs_start_dt')
+        end_dt = row.get('_obs_end_dt')
+        if start_dt and end_dt:
+            duration_days = (end_dt - start_dt).total_seconds() / 86400
+            ax.barh(site_y[row['site']], duration_days, left=start_dt, height=0.4, color='royalblue')
+
+    ax.set_yticks(range(len(sites)))
+    ax.set_yticklabels(sites)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+    plt.xticks(rotation=45)
+    plt.xlabel('UTC Time')
+    plt.title(f'Observing Windows Timeline: {ASTEROID_NAME}')
+    plt.grid(axis='x', linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(f'timeline_{ASTEROID_ID}.png')
+    plt.show()
+
+def plot_sky_brightness(rows):
+    #plots lunar sky brightness at the start of each window
+    if not rows: return
+    fig, ax = plt.subplots(figsize=(10, 4))
+    sites = list(set(r['site'] for r in rows))
+
+    for site in sites:
+        site_rows = [r for r in rows if r['site'] == site and r.get('_obs_start_dt') is not None]
+        if not site_rows: continue
+
+        times = [r['_obs_start_dt'] for r in site_rows]
+        v_sky = [float(r['start_v_sky']) for r in site_rows if r['start_v_sky']]
+        ax.plot(times, v_sky, marker='o', linestyle='-', label=site)
+
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    plt.xticks(rotation=45)
+    plt.ylabel('Sky Brightness (V mag/arcsec²)')
+    plt.title(f'Sky Brightness at Window Start: {ASTEROID_NAME}')
+    plt.legend()
+    plt.grid(linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(f'sky_brightness_{ASTEROID_ID}.png')
+    plt.show()
 
 # ==============================================================================
 # CELL 9 — MAIN
@@ -707,6 +809,7 @@ def main():
     # ── observing windows ─────────────────────────────────────────────────────
     all_rows = []
 
+    tf = TimezoneFinder()
     for site_name, cfg in SITES.items():
         obs = make_obs(cfg)
 
@@ -714,7 +817,11 @@ def main():
                      if isinstance(DARK_SKY_MAG, dict)
                      else float(DARK_SKY_MAG))
 
-        tz_str  = cfg['tz']
+        # auto-lookup timezone if missing
+        if 'tz' not in cfg:
+            cfg['tz'] = tf.timezone_at(lng=cfg['lon'], lat=cfg['lat'])
+        tz_str = cfg['tz']
+
         lat_str = f"{abs(cfg['lat']):.4f}° {'N' if cfg['lat'] >= 0 else 'S'}"
         lon_str = f"{abs(cfg['lon']):.4f}° {'E' if cfg['lon'] >= 0 else 'W'}"
 
@@ -765,9 +872,19 @@ def main():
 
     # ── save windows CSV ──────────────────────────────────────────────────────
     print()
+
     rule()
-    if SAVE_CSV and all_rows:
+
+    if SAVE_CSV:
         save_windows_csv(all_rows, CSV_WINDOWS)
+        print(f"\n  >> saved windows to {CSV_WINDOWS}")
+
+    #generate calendars and plots
+    print("\nGenerating actionable outputs...")
+    save_windows_ics(all_rows, f"windows_{ASTEROID_ID}")
+    plot_observing_timeline(all_rows)
+    plot_sky_brightness(all_rows)
+
     rule()
 
 
