@@ -57,8 +57,16 @@ PERIOD_H     = 109.9
 PERIOD_ERR_H = 0.52
 
 # --- date range ---
-from datetime import datetime, timedelta
-DATE_START = datetime.now() # or use datetime(year, month, day)
+from datetime import datetime, timedelta, timezone
+# CRITICAL: use UTC midnight, not local time.
+# datetime.now() returns naive local time; if passed to astropy Time(..., scale='utc')
+# it is silently misinterpreted as UTC, introducing a systematic phase offset equal
+# to the local UTC offset (e.g. 4h in EDT → ~0.33 phase error for P=11.939h Cindygraber).
+# Normalising to UTC midnight also removes the time-of-day component so that the
+# phase reference point is consistent across all sites and all nights.
+DATE_START = datetime.now(timezone.utc).replace(
+    hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+)
 N_DAYS     = 15
 
 # --- ephemeris sampling ---
@@ -465,6 +473,10 @@ def gap_occurrences(date, radec_delta_lookup, site_cfg=None):
         g1s_min, g1e_max, g2s_min, g2e_max — UTC datetimes, expanded by
         accumulated period uncertainty since T0.
     """
+    # Normalise to UTC midnight — eliminates any time-of-day component that
+    # would otherwise produce a systematic phase offset equal to hours-since-midnight.
+    date = date.replace(hour=0, minute=0, second=0, microsecond=0)
+
     # interpolate asteroid position at start of this date for phase reference
     ra_deg, dec_deg, delta_au = interpolate_position(radec_delta_lookup, date)
 
