@@ -12,34 +12,38 @@ Developed as part of an ongoing photometric campaign on asteroid **7605 Cindygra
 
 Single-site lightcurve campaigns on slowly-rotating asteroids frequently produce phase gaps — intervals of the rotation period that are perpetually unobservable from a fixed longitude due to the relationship between synodic drift and the local night window. Closing a phase gap requires coordinated observations from geographically separated sites during the specific UTC intervals when the gap phase is visible.
 
-No existing tool in the Python small-body astronomy ecosystem addresses this problem directly
+No existing tool in the Python small-body astronomy ecosystem addresses this problem directly.
 
 ---
 
 ## Features
 
 - **MPC ephemeris query** via `astroquery.mpc.MPC.get_ephemeris` — live RA/Dec, magnitude, distance, and altitude for any numbered asteroid at any site and step size
-- **Phase gap scheduling** — given T0, period, and gap phase boundaries, computes both daily gap occurrences and their observable windows at each site
+- **Phase gap scheduling** — given T0 (BJD_TDB+LTTC), period, and gap phase boundaries, computes both daily gap occurrences and their observable windows at each site
 - **General visibility mode** — works without lightcurve parameters as a standalone multi-site observing window calculator
 - **Astronomical twilight** — computed dynamically per site and date using pyephem (Sun at −18°); no hardcoded values
 - **Lunar sky brightness** — full Krisciunas & Schaefer (1991) PASP 103, 1033 physical model; reports V-band sky brightness (mag/arcsec²) at window start and midpoint with qualitative quality labels
-- **Local time display** — UTC windows converted to local time using per-site offsets; seasonal DST handled via a single configurable integer
+- **Automatic timezone detection** — IANA timezone strings resolved via `timezonefinder`; DST handled automatically with no seasonal edits
+- **BJD_TDB + light travel time correction** — phase calculation uses barycentric time with light travel time subtracted per Eastman et al. (2010)
 - **CSV output** — separate files for the full ephemeris table and per-site/per-night observing windows with all moon metrics
+- **iCalendar export** — optional `.ics` files for import into calendar apps
 
 ---
 
 ## Requirements
 
 ```
-astroquery >= 0.4.6
-astropy    >= 5.0
-ephem      >= 4.1
+astroquery     >= 0.4.6
+astropy        >= 5.0
+ephem          >= 4.1
+timezonefinder >= 6.0
+tzdata
 ```
 
 Install with:
 
 ```bash
-pip install astroquery astropy ephem
+pip install astroquery astropy ephem timezonefinder tzdata
 ```
 
 The script is designed for use in Google Colab but runs in any standard Python 3.9+ environment.
@@ -63,23 +67,25 @@ USE_LIGHTCURVE = False
 SITES = {
     'G40 Canary 1': {
         'lat': 28.29970, 'lon': -16.5082, 'elev': 2390,
-        'mpc_code': 'G40', 'time_offset': 0,
+        'mpc_code': 'G40',
     },
 }
 PRIMARY_SITE = 'G40 Canary 1'
 ```
 
-Running with `USE_LIGHTCURVE = False` produces a nightly visibility window for each site (twilight, altitude > `MIN_ALT_DEG`) with lunar sky brightness, without any phase filtering.
+Timezone is resolved automatically from latitude/longitude. Running with `USE_LIGHTCURVE = False` produces a nightly visibility window for each site (twilight, altitude > `MIN_ALT_DEG`) with lunar sky brightness, without any phase filtering.
 
 ### Full phase gap configuration
 
 ```python
 USE_LIGHTCURVE = True
-T0_JD         = 2461084.655574   # JDo(LTC) from lightcurve fit
+T0_JD         = 2461084.655574   # BJD_TDB+LTTC from lightcurve fit
 PERIOD_H      = 11.939            # rotation period in hours
 GAP_START_PH  = 0.72              # phase where your coverage ends
 GAP_END_PH    = 1.00              # phase 1.0 = 0.0
 ```
+
+`T0_JD` must be in Barycentric Julian Date (BJD_TDB) with the one-way light travel time correction already applied. If your epoch is in JD_UTC, convert it first using the LTTC calculator included in Cell 1 or via [Eastman et al. (2010)](https://astroutils.astronomy.osu.edu/time/bjdconvert.html).
 
 The scheduler computes two gap occurrences per night (separated by one rotation period), intersects each with the dark/visible window at every site, and reports observable windows, altitudes, and sky conditions for Gap 1 and Gap 2 independently.
 
@@ -89,24 +95,24 @@ The scheduler computes two gap occurrences per night (separated by one rotation 
 SITES = {
     'G40 Canary 1': {
         'lat': 28.29970, 'lon': -16.5082, 'elev': 2390,
-        'mpc_code': 'G40', 'time_offset': 0,         # WET
+        'mpc_code': 'G40',
     },
     'E62 Australia 1': {
         'lat': -31.2816709, 'lon': 149.0801825, 'elev': 805,
-        'mpc_code': 'E62', 'time_offset': 11,         # AEDT (summer); 10 for winter
+        'mpc_code': 'E62',
     },
     'W88 Chile 2': {
         'lat': -33.269, 'lon': -70.53, 'elev': 1492,
-        'mpc_code': 'W88', 'time_offset': -3,         # CLST (summer); -4 for winter
+        'mpc_code': 'W88',
     },
     'I12 Phillips Academy Observatory': {
         'lat': 42.647611, 'lon': -71.129, 'elev': 80,
-        'mpc_code': 'I12', 'time_offset': -5,         # EST (winter); -4 for summer
+        'mpc_code': 'I12',
     },
 }
 ```
 
-Any MPC observatory code is valid. Add or remove entries freely — the scheduler loops over all sites automatically.
+Any MPC observatory code is valid. Timezone offsets and DST are resolved automatically from coordinates. Add or remove entries freely — the scheduler loops over all sites.
 
 ---
 
@@ -188,7 +194,7 @@ The tool was developed and validated against an active photometric campaign on *
 | Parameter | Value |
 |-----------|-------|
 | Rotation period | 11.939 h |
-| T0 (JDo LTC) | 2461084.655574 |
+| T0 (BJD_TDB+LTTC) | 2461084.655574 |
 | Phase gap | 0.72 – 1.00 (200.6 min) |
 | Gap drift | 7.32 min/day earlier |
 | Campaign window | 2026 March 1–10 |
@@ -210,18 +216,18 @@ Moon interference (illumination 55–100%, separation 11–22° at campaign star
 |-----------|------|-------------|
 | `ASTEROID_ID` | str | MPC number or packed designation |
 | `ASTEROID_NAME` | str | Display name only |
-| `DATE_START` | datetime | First night of campaign |
+| `DATE_START` | datetime | First night of campaign (UTC midnight) |
 | `N_DAYS` | int | Number of nights |
 | `EPHEM_STEP` | str | MPC query step: `'1d'`, `'6h'`, `'1h'`, `'30min'` |
 | `ALT_STEP_MINUTES` | int | Altitude stepping resolution for window calculation |
-| `SITES` | dict | Site configs: lat, lon, elev, mpc_code, time_offset |
+| `SITES` | dict | Site configs: lat, lon, elev, mpc_code |
 | `PRIMARY_SITE` | str | Site used for MPC query |
 | `MIN_ALT_DEG` | float | Minimum asteroid altitude threshold |
 | `DARK_SKY_MAG` | float or dict | Site dark sky V brightness (mag/arcsec²) |
-| `EXTINCTION_K` | float | V-band extinction coefficient (mag/airmass) |
+| `EXTINCTION_K` | float or dict | V-band extinction coefficient (mag/airmass) |
 | `SKY_EXCELLENT` / `SKY_GOOD` / `SKY_FAIR` | float | Quality label thresholds |
 | `USE_LIGHTCURVE` | bool | Enable phase gap filtering |
-| `T0_JD` | float | Epoch of phase 0.0 (Julian Date, lightcurve-corrected) |
+| `T0_JD` | float | Epoch of phase 0.0 (BJD_TDB+LTTC) |
 | `PERIOD_H` | float | Rotation period in hours |
 | `GAP_START_PH` | float | Phase where existing coverage ends |
 | `GAP_END_PH` | float | Phase where gap closes (typically 1.0) |
@@ -241,10 +247,25 @@ The script is organized into numbered cells for use in Google Colab. Only **Cell
 | 3 | MPC ephemeris query |
 | 4 | Site setup, altitude, and twilight utilities |
 | 5 | RA/Dec interpolation from MPC table |
-| 6 | Krisciunas-Schaefer sky brightness model |
-| 7 | Window calculator |
-| 8 | Display and CSV output |
-| 9 | Main |
+| 6 | BJD_TDB + light travel time correction |
+| 7 | Krisciunas-Schaefer sky brightness model |
+| 8 | Window calculator |
+| 9 | Display and CSV output |
+| 10 | Main |
+
+---
+
+## Citation
+
+If you use this code in published work, please cite the software record:
+
+> Zimmerman, H. (2026). *asteroid-scheduler: Phase-gap-aware multi-site observing window scheduler for asteroid rotational lightcurve campaigns*. Astrophysics Source Code Library. [ascl:XXXX.XXX]
+
+A BibTeX entry is provided in `CITATION.cff`.
+
+The Cindygraber campaign results are described in:
+
+> Zimmerman, H. (in prep). Rotation period and taxonomy of 7605 Cindygraber. *Minor Planet Bulletin*.
 
 ---
 
