@@ -1,0 +1,57 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "asteroid-scheduler: Phase-gap-aware multi-site observing window scheduler for asteroid rotational lightcurve campaigns"
+version: 1.0.0
+date-released: 2026-03-10
+authors:
+  - family-names: Zimmerman
+    given-names: Henry
+    affiliation: "Phillips Academy, Andover, MA"
+repository-code: "https://github.com/henryzimmerman/asteroid-scheduler"
+license: MIT
+abstract: >
+  asteroid-scheduler identifies when and where uncovered phase intervals
+  (gaps) in an asteroid rotational lightcurve are observable across a set
+  of ground-based sites. It queries live ephemerides from the Minor Planet
+  Center, computes per-night visibility windows using dynamically calculated
+  astronomical twilight, evaluates lunar sky brightness via the
+  Krisciunas-Schaefer (1991) physical model, and applies barycentric time
+  correction with light travel time per Eastman et al. (2010). Output
+  includes console display, CSV tables, and optional iCalendar export.
+keywords:
+  - asteroid
+  - lightcurve
+  - photometry
+  - observing scheduler
+  - rotation period
+  - minor planet
+  - sky brightness
+  - ephemeris
+references:
+  - type: article
+    title: "Lunar Sky Brightness"
+    authors:
+      - family-names: Krisciunas
+        given-names: Kevin
+      - family-names: Schaefer
+        given-names: Bradley E.
+    journal: "Publications of the Astronomical Society of the Pacific"
+    volume: 103
+    pages: 1033
+    year: 1991
+    doi: "10.1086/132921"
+  - type: article
+    title: "Achieving Better Than 1 Minute Accuracy in the Heliocentric and Barycentric Julian Dates"
+    authors:
+      - family-names: Eastman
+        given-names: Jason
+      - family-names: Siverd
+        given-names: Robert
+      - family-names: Gaudi
+        given-names: B. Scott
+    journal: "Publications of the Astronomical Society of the Pacific"
+    volume: 122
+    pages: 935
+    year: 2010
+    doi: "10.1086/655938"
