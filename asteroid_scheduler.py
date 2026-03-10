@@ -2,6 +2,7 @@
 asteroid ephemeris + observing window scheduler
 with Krisciunas-Schaefer (1991) lunar sky brightness model
 ==========================================================
+version: 1.0.0
 queries MPC via astroquery.mpc.MPC.get_ephemeris, computes visibility
 windows at each site (twilight, altitude), optionally constrains to a
 lightcurve phase gap, and reports lunar sky brightness at window start
@@ -34,8 +35,15 @@ PERIOD_H     = 0.0891933333  # 5.3 minutes!
 PERIOD_ERR_H = 0.000001#'''
 
 # ex 3: bright / slow rotator (uncomment to test)
-ASTEROID_ID   = '343'
+'''ASTEROID_ID   = '343'
 ASTEROID_NAME = 'Ostara'
+T0_JD        = 2452900.0
+PERIOD_H     = 109.9
+PERIOD_ERR_H = 0.52#'''
+
+# default: 7605 Cindygraber — validated campaign target (Phillips Academy / MPC I12)
+ASTEROID_ID   = '7605'
+ASTEROID_NAME = 'Cindygraber'
 
 # !! IMPORTANT — BJD_TDB + LTTC EPOCH REQUIRED !!
 # T0_JD must be expressed in Barycentric Julian Date (BJD_TDB) with the
@@ -52,9 +60,9 @@ ASTEROID_NAME = 'Ostara'
 # failure to use a BJD_TDB+LTTC epoch will introduce a systematic phase
 # offset of up to ~8 minutes (delta_au * 0.0057755 days) that drifts with
 # changing earth-asteroid distance.
-T0_JD        = 2452900.0   # <-- must be BJD_TDB+LTTC; see warning above
-PERIOD_H     = 109.9
-PERIOD_ERR_H = 0.52
+T0_JD        = 2461084.655574   # bjd_tdb+lttc from Cindygraber lightcurve fit
+PERIOD_H     = 11.939
+PERIOD_ERR_H = 0.001
 
 # --- date range ---
 from datetime import datetime, timedelta, timezone
