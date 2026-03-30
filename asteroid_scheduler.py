@@ -119,7 +119,7 @@ SITES = {
 PRIMARY_SITE = 'G40 Canary 1'
 
 # --- altitude threshold ---
-MIN_ALT_DEG = 20.0
+MIN_ALT_DEG = 30.0
 
 # --- moon / sky brightness (Krisciunas-Schaefer 1991) ---
 DARK_SKY_MAG = {
