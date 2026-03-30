@@ -12,7 +12,7 @@ with the tzdata package for DST handling — no manual offset updates needed.
 phase calculation uses BJD_TDB with light travel time correction (LTTC)
 per Eastman et al. (2010). T0_JD must be in BJD_TDB+LTTC format.
 
-install: pip install astroquery astropy ephem tzdata
+install: pip install astroquery astropy ephem tzdata timezonefinder icalendar
 """
 
 # ==============================================================================
