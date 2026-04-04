@@ -2,7 +2,7 @@
 
 **Phase-gap-aware multi-site observing window scheduler for asteroid rotational lightcurve campaigns.**
 
-Published to the Astrophysics Source Code Library: [ascl:XXXX.XXX]
+<!-- Published to the Astrophysics Source Code Library: [ascl:XXXX.XXX] -->
 
 ## The problem
 
