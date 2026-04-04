@@ -19,6 +19,7 @@ abstract: >
   Krisciunas-Schaefer (1991) physical model, and applies barycentric time
   correction with light travel time per Eastman et al. (2010). Output
   includes console display, CSV tables, and optional iCalendar export.
+doi: 10.5281/zenodo.18944223
 keywords:
   - asteroid
   - lightcurve
