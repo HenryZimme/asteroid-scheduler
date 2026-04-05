@@ -1,0 +1,78 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "asteroid-scheduler",
+  "softwareLabel": "asteroid-scheduler",
+  "description": "Phase-gap-aware multi-site observing window scheduler for asteroid rotational lightcurve campaigns. Given a known or candidate rotation period, identifies when and where uncovered phase intervals (gaps) are observable across any set of ground-based sites. Queries live ephemerides from the Minor Planet Center via astroquery, computes per-night dark windows using dynamically calculated astronomical twilight, evaluates lunar sky brightness via the Krisciunas-Schaefer (1991) physical model, and applies barycentric time correction with light travel time per Eastman et al. (2010). Runs without lightcurve parameters as a general multi-site visibility calculator. Output includes console display, CSV tables, and optional iCalendar export.",
+  "version": "1.1.0",
+  "dateCreated": "2026-03-10",
+  "datePublished": "2026-03-10",
+  "license": "https://spdx.org/licenses/MIT",
+  "url": "https://github.com/henryzimmerman/asteroid-scheduler",
+  "codeRepository": "https://github.com/henryzimmerman/asteroid-scheduler",
+  "identifier": "https://doi.org/10.5281/zenodo.19422075",
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Henry",
+      "familyName": "Zimmerman",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Phillips Academy, Andover, MA"
+      }
+    }
+  ],
+  "programmingLanguage": [
+    {
+      "@type": "ComputerLanguage",
+      "name": "Python"
+    }
+  ],
+  "runtimePlatform": "Python 3",
+  "softwareRequirements": [
+    "astroquery>=0.4.11",
+    "astropy>=7.2.0",
+    "ephem>=4.2.1",
+    "pytz>=2025.2",
+    "tzdata>=2025.3",
+    "icalendar>=7.0.2",
+    "timezonefinder>=8.2.1",
+    "matplotlib>=3.10.0"
+  ],
+  "keywords": [
+    "asteroid",
+    "lightcurve",
+    "photometry",
+    "observing scheduler",
+    "rotation period",
+    "minor planet",
+    "sky brightness",
+    "ephemeris",
+    "phase gap",
+    "time-domain astronomy",
+    "multi-site"
+  ],
+  "referencePublication": [
+    {
+      "@type": "ScholarlyArticle",
+      "name": "Quantifying lunar sky brightness",
+      "author": [
+        {"@type": "Person", "familyName": "Krisciunas", "givenName": "Kevin"},
+        {"@type": "Person", "familyName": "Schaefer", "givenName": "Bradley E."}
+      ],
+      "datePublished": "1991",
+      "identifier": "https://doi.org/10.1086/132921"
+    },
+    {
+      "@type": "ScholarlyArticle",
+      "name": "Achieving Better Than 1 Minute Accuracy in the Heliocentric and Barycentric Julian Dates",
+      "author": [
+        {"@type": "Person", "familyName": "Eastman", "givenName": "Jason"},
+        {"@type": "Person", "familyName": "Siverd", "givenName": "Robert"},
+        {"@type": "Person", "familyName": "Gaudi", "givenName": "B. Scott"}
+      ],
+      "datePublished": "2010",
+      "identifier": "https://doi.org/10.1086/655938"
+    }
+  ]
+}
