@@ -22,6 +22,11 @@ Developed for an ongoing photometric campaign on main-belt asteroid 7605 Cindygr
 
 The campaign results are being prepared for submission to the Minor Planet Bulletin.
 
+## Visualization
+
+You can find a helpful visualization of the asteroid's observational window from Andover on my website: [asteroid_observer](https://henryzimmerman.net/asteroid_observer).
+
+
 ## Citation
 
 Zimmerman, H. (2026). *asteroid-scheduler: Phase-gap-aware multi-site observing window scheduler for asteroid rotational lightcurve campaigns*. Astrophysics Source Code Library. [ascl:XXXX.XXX]
