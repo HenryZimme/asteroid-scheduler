@@ -18,7 +18,7 @@ Output is printed to the console and saved to CSV, with one row per site, night,
 
 ## Validation: 7605 Cindygraber
 
-Developed for an ongoing photometric campaign on main-belt asteroid 7605 Cindygraber (H = 13.6) from Phillips Academy Observatory (MPC I12). With a rotation period of 11.939 hours and a phase gap spanning 0.72 to 1.00 (about 200 minutes), PAO alone cannot close the gap. The scheduler identified the Canary Islands (G40) and Australia (E62) as complementary sites covering both daily gap occurrences across all 10 nights of the March 2026 campaign window.
+Developed for an ongoing photometric campaign on main-belt asteroid 7605 Cindygraber (H = 13.6) from Phillips Academy Observatory (MPC I12). With a rotation period of 11.939 hours and a phase gap spanning 0.72 to 1.00 (about 200 minutes), PAO alone cannot close the gap. The scheduler identified the Canary Islands (G40) and Australia (E62) as ideal complementary sites covering both daily gap occurrences across all 10 nights of the March 2026 campaign window.
 
 The campaign results are being prepared for submission to the Minor Planet Bulletin.
 
